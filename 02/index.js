@@ -41,8 +41,8 @@ if (!existing) {
 // 
 
 const server = createServer(async (req, res) => {
-	if (['/'].includes(req.url) && req.method === 'GET') {
-		const token = getToken(req)
+	if (req.url === '/' && req.method === 'GET') {
+		const token = await getToken(req)
 
 		if (!token) {
 			res.statusCode = 302
@@ -51,23 +51,19 @@ const server = createServer(async (req, res) => {
 			return
 		}
 
-		// try {
-		// 	const decoded = jwt.verify(token, JWT_SECRET)
-		// 	console.log(decoded)
-		// } catch (err) {
-		// 	res.statusCode = 302
-		// 	res.setHeader('Location', '/in')
-		// 	res.end('Unauthorized')
-		// 	return
-		// }
+		let payload
+		try {
+			payload = jwt.verify(token, JWT_SECRET)
+		} catch (err) {
+			res.statusCode = 302
+			res.setHeader('Location', '/in')
+			res.end('Unauthorized')
+			return
+		}
 
-		return
-	}
-
-	if (req.url === '/' && req.method === 'GET') {
 		res.statusCode = 200
 		res.setHeader('Content-Type', 'text/plain')
-		res.end('OK')
+		res.end('Authorized as ' + payload.email)
 		return
 	}
 
@@ -100,12 +96,16 @@ const server = createServer(async (req, res) => {
 			if (!user || !bcrypt.compareSync(password, user.password)) {
 				res.statusCode = 401
 				res.setHeader('Content-Type', 'text/plain')
-				res.end('Unauthorized')
+				res.end('Invalid credentials')
 				return
 			}
 
-			res.statusCode = 200
+			const token = await createToken({ email })
+			
+			res.statusCode = 302
 			res.setHeader('Content-Type', 'text/plain')
+			res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=3600`)
+			res.setHeader('Location', '/')
 			res.end('OK')
 		})
 
@@ -183,13 +183,24 @@ server.listen(PORT)
 
 // 
 
-function getToken(req) {
-	return req.headers.cookie?.split('; ').find((row) => row.startsWith('token=')).split('=')[1]
-}
-
 async function someAsyncFunction(email, password) {
 	return new Promise((resolve) => {
 		setTimeout(() => resolve({ message: 'Data fetched successfully' }), 1000)
+	})
+}
+
+async function getToken(req) {
+	return new Promise((resolve) => {
+		const token = req.headers.cookie
+			?.split('; ')
+			.find(row => row.startsWith('token='))
+			?.split('=')[1]
+
+		if (token) {
+			resolve(token)
+		} else {
+			resolve(null)
+		}
 	})
 }
 
