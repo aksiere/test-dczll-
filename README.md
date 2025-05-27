@@ -2,19 +2,33 @@
 - NodeJS (v22.16.0)
 
 # 01
-`node index.js`
-
-примечания:
-* -
+```
+cd 01
+```
+```
+node index.js
+```
 
 # 02
-`node index.js`
-
-примечания:
-* -
+```
+cd 02
+```
+```
+npm install
+```
+```
+node index.js
+```
 
 # 03
-`node index.js`
-
-примечания:
-* редис может не подключаться без впна
+> [!IMPORTANT]
+> редис может не подключаться без впна
+```
+cd 03
+```
+```
+npm install
+```
+```
+node index.js
+```
