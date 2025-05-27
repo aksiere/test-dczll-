@@ -77,14 +77,25 @@ const server = createServer(async (req, res) => {
 
 				<div>
 					<p>Files:</p>
-					<ul>
-						${files?.map(file => `
-							<li>
-								<a href="/files/${file.id}">${file.name}${file.ext ? '.' + file.ext : ''}</a>
-								<span>(${file.downloaded_n_times} dls)</span>
-							</li>
-						`).join('') || '<li>No files uploaded</li>'}
-					</ul>
+					<div style='display: flex; flex-direction: column; gap: 1rem;'>
+						${files?.reverse().map(file => {
+							const uploadedAt = new Date(file.uploaded_at)
+							const expiresAt = new Date(file.uploaded_at)
+							expiresAt.setMinutes(expiresAt.getMinutes() + file.time_to_delete)
+
+							return `
+								<div style='display: flex; flex-direction: column; gap: 0.25rem;'>
+									<div style='display: flex; gap: 0.5rem; align-items: center;'>
+										<a href="/files/${file.id}">${file.name}${file.ext ? '.' + file.ext : ''}</a>
+										<button type="button" onclick="navigator.clipboard.writeText(location.origin + '/files/${file.id}')">copy link</button>
+									</div>
+									<span style='font-family: monospace; font-size: 14px; color: #555;'>${file.id}</span>
+									<span>${uploadedAt.toLocaleString('ru-RU')} -- ${expiresAt.toLocaleString('ru-RU')} (${file.time_to_delete} min.)</span>
+									<span>(${file.downloaded_n_times} downloads)</span>
+								</div>
+							`
+						}).join('') || '<span style=\'color: #555;\'>No files uploaded</span>'}
+					</div>
 				</div>
 			`)
 			return
@@ -190,6 +201,7 @@ const server = createServer(async (req, res) => {
 			res.statusCode = 200
 			res.setHeader('Content-Type', 'text/plain')
 			res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=${TIME_TO_LIVE}`)
+			res.setHeader('Location', '/')
 			res.end('OK')
 		})
 
