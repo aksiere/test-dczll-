@@ -28,6 +28,7 @@ const server = createServer(async (req, res) => {
 				<button type='submit' style='padding: .5rem;'>search</button>
 			</form>
 		`)
+		return
 	}
 
 	if (req.url.startsWith('/weather?') && req.method === 'GET') {
@@ -47,13 +48,13 @@ const server = createServer(async (req, res) => {
 				const key = lat + '_' + lon
 				const data = await client.get(key)
 
-				res.statusCode = 200
-				res.setHeader('Content-Type', 'text/html')
-				res.setHeader('Cache-Control', `public, max-age=${TIME_TO_LIVE}`)
-
 				if (data) {
 					// return Response.json({ data: JSON.parse(data), from: 'cache' }, { headers: { 'Cache-Control': `public, max-age=${TIME_TO_LIVE}` } })
+					res.statusCode = 200
+					res.setHeader('Content-Type', 'text/html')
+					res.setHeader('Cache-Control', `public, max-age=${TIME_TO_LIVE}`)
 					res.end(showChart(JSON.parse(data)))
+					return
 				}
 
 				const r = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m&forecast_hours=24`)).json()
@@ -61,7 +62,11 @@ const server = createServer(async (req, res) => {
 				await client.expire(key, TIME_TO_LIVE)
 
 				// return Response.json({ data: r, from: 'api' })
+				res.statusCode = 200
+				res.setHeader('Content-Type', 'text/html')
+				res.setHeader('Cache-Control', `public, max-age=${TIME_TO_LIVE}`)
 				res.end(showChart(r))
+				return
 			}
 
 			if (city) {
@@ -83,14 +88,16 @@ const server = createServer(async (req, res) => {
 						`).join('') || 'No results found.'}
 					</div>
 				`)
+				return
 			}
 			
 		} catch (error) {
 			res.statusCode = 500
 			res.end(`Error fetching weather data: ${error.message}`)
+			return
 		}
 	}
-	
+
 	res.statusCode = 404
 	res.setHeader('Content-Type', 'text/plain')
 	res.end('Not Found')
