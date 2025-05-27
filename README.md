@@ -4,14 +4,6 @@
 # стек
 - NodeJS (v22.16.0)
 
-# 01
-```
-cd 01
-```
-```
-node index.js
-```
-
 # 02
 > [!IMPORTANT]
 > зависимости: `bcryptjs` и `jsonwebtoken`
