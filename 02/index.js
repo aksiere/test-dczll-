@@ -1,13 +1,20 @@
 import { createServer } from 'node:http'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
+import path from 'node:path'
 
 const PORT = 3000
 const JWT_SECRET = 'alpine'
+const TIME_TO_LIVE = 60 * 60 * 24
 
 // DB
 
 import { DatabaseSync } from 'node:sqlite'
+import { createReadStream, mkdir, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { createWriteStream } from 'node:fs'
+import { mkdirSync, existsSync } from 'node:fs'
+import { unlinkSync } from 'node:fs'
 const db = new DatabaseSync('test.db')
 
 db.exec(`
@@ -29,7 +36,6 @@ db.exec(`
     )
 `)
 
-// Create test user if not exists
 const testEmail = 'shiropatin@gmail.com'
 const testPassword = 'alpine'
 const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(testEmail)
@@ -54,17 +60,42 @@ const server = createServer(async (req, res) => {
 		let payload
 		try {
 			payload = jwt.verify(token, JWT_SECRET)
+			const files = await getUserFiles(payload.email)
+
+			res.statusCode = 200
+			res.setHeader('Content-Type', 'text/html')
+			res.end(`
+				<p>${payload.email}</p>
+				
+				<div>
+					<form method='POST' action='/upload' enctype='multipart/form-data'>
+						<input type='file' name='file' required>
+						<input type='number' name='time_to_delete' placeholder='delete in N minutes' value='720' required>
+						<button type='submit'>upload</button>
+					</form>
+				</div>
+
+				<div>
+					<p>Files:</p>
+					<ul>
+						${files?.map(file => `
+							<li>
+								<a href="/files/${file.id}">${file.name}${file.ext ? '.' + file.ext : ''}</a>
+								<span>(${file.downloaded_n_times} dls)</span>
+							</li>
+						`).join('') || '<li>No files uploaded</li>'}
+					</ul>
+				</div>
+			`)
+			return
 		} catch (err) {
+			console.log(err)
+
 			res.statusCode = 302
 			res.setHeader('Location', '/in')
 			res.end('Unauthorized')
 			return
 		}
-
-		res.statusCode = 200
-		res.setHeader('Content-Type', 'text/plain')
-		res.end('Authorized as ' + payload.email)
-		return
 	}
 
 	if (req.url === '/in' && req.method === 'GET') {
@@ -83,7 +114,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.url === '/in' && req.method === 'POST') {
 		let body = ''
-		
+
 		req.on('data', chunk => {
 			body += chunk
 		})
@@ -101,10 +132,10 @@ const server = createServer(async (req, res) => {
 			}
 
 			const token = await createToken({ email })
-			
+
 			res.statusCode = 302
 			res.setHeader('Content-Type', 'text/plain')
-			res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=3600`)
+			res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=${TIME_TO_LIVE}`)
 			res.setHeader('Location', '/')
 			res.end('OK')
 		})
@@ -128,7 +159,7 @@ const server = createServer(async (req, res) => {
 
 	if (req.url === '/up' && req.method === 'POST') {
 		let body = ''
-		
+
 		req.on('data', chunk => {
 			body += chunk
 		})
@@ -155,22 +186,138 @@ const server = createServer(async (req, res) => {
 			const hash = bcrypt.hashSync(password, 10)
 			db.prepare('INSERT INTO users (email, password) VALUES (?, ?)').run(email, hash)
 			const token = await createToken({ email })
-			
+
 			res.statusCode = 200
 			res.setHeader('Content-Type', 'text/plain')
-			res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=60`)
+			res.setHeader('Set-Cookie', `token=${token}; HttpOnly; Path=/; Max-Age=${TIME_TO_LIVE}`)
 			res.end('OK')
 		})
 
 		return
 	}
 
-	if (req.url === '/test' && req.method === 'GET') {
-		const data = await someAsyncFunction()
+	if (req.url === '/upload' && req.method === 'POST') {
+		const token = await getToken(req)
+		if (!token) {
+			res.statusCode = 401
+			res.end('Unauthorized')
+			return
+		}
+
+		let payload
+		try {
+			payload = jwt.verify(token, JWT_SECRET)
+		} catch (err) {
+			res.statusCode = 401
+			res.end('Invalid token')
+			return
+		}
+
+		if (!existsSync('./uploads')) {
+			mkdirSync('./uploads')
+		}
+
+		let chunks = []
+		const boundary = req.headers['content-type'].split('boundary=')[1]
+
+		req.on('data', chunk => {
+			chunks.push(chunk)
+		})
+
+		req.on('end', async () => {
+			// const { email, password } = Object.fromEntries(params.entries())
+
+			const buffer = Buffer.concat(chunks)
+			const marker = Buffer.from(`--${boundary}`)
+			const boundaryNewLine = Buffer.from('\r\n')
+
+			let position = 0
+			let fileBuffer = null
+			let fileName = ''
+			let timeToDelete = 720 // Default to 720 minutes
+
+			while (position < buffer.length) {
+				const boundaryPosition = buffer.indexOf(marker, position)
+				if (boundaryPosition < 0) break
+
+				const dataStart = buffer.indexOf(boundaryNewLine, boundaryPosition) + boundaryNewLine.length
+				const headers = buffer.slice(dataStart, buffer.indexOf(boundaryNewLine.toString() + boundaryNewLine.toString(), dataStart)).toString()
+
+				if (headers.includes('filename')) {
+					const fileNameMatch = headers.match(/filename="([^"]+)"/)
+					if (fileNameMatch) {
+						fileName = fileNameMatch[1]
+					}
+
+					const fileStart = buffer.indexOf(boundaryNewLine + boundaryNewLine, dataStart) + (boundaryNewLine.length * 2)
+					const fileEnd = buffer.indexOf(marker, fileStart) - 2 // -2 to remove \r\n
+
+					fileBuffer = buffer.slice(fileStart, fileEnd)
+				} else if (headers.includes('time_to_delete')) {
+					const contentStart = buffer.indexOf(boundaryNewLine + boundaryNewLine, dataStart) + (boundaryNewLine.length * 2)
+					const contentEnd = buffer.indexOf(marker, contentStart) - 2
+					const timeValue = buffer.slice(contentStart, contentEnd).toString()
+					timeToDelete = parseInt(timeValue) || 720
+					console.log(timeToDelete)
+					
+				}
+
+				position = boundaryPosition + marker.length
+			}
+
+			if (!fileName || !fileBuffer) {
+				res.statusCode = 400
+				res.end('No file uploaded')
+				return
+			}
+
+			const fileId = randomUUID()
+			const fileExt = path.extname(fileName).slice(1)
+			const fileNameWithoutExt = path.basename(fileName, '.' + fileExt)
+
+			if (!existsSync('./uploads')) {
+				mkdirSync('./uploads')
+			}
+
+			writeFileSync(`./uploads/${fileId}.${fileExt}`, fileBuffer)
+			await saveFile(fileId, fileNameWithoutExt, fileExt, timeToDelete, payload.email)
+
+			res.statusCode = 302
+			res.setHeader('Location', '/')
+			res.end('File uploaded successfully')
+		})
+
+		return
+	}
+
+	if (req.url.startsWith('/files/') && req.method === 'GET') {
+		const fileId = req.url.split('/files/')[1]
+		const file = await getFile(fileId)
+
+		if (!file) {
+			res.statusCode = 404
+			res.setHeader('Content-Type', 'text/plain')
+			res.end('File not found')
+			return
+		}
+
+		const filePath = `./uploads/${file.id}.${file.ext}`
+		if (!existsSync(filePath)) {
+			res.statusCode = 404
+			res.setHeader('Content-Type', 'text/plain')
+			res.end('File not found')
+			return
+		}
+
+		file.downloaded_n_times += 1
+		await updateDownloadCount(file.id, file.downloaded_n_times)
 
 		res.statusCode = 200
-		res.setHeader('Content-Type', 'text/plain')
-		res.end(data.message)
+		res.setHeader('Content-Type', 'application/octet-stream')
+		res.setHeader('Content-Disposition', `attachment; filename="${file.name}${file.ext ? '.' + file.ext : ''}"`)
+
+		const stream = createReadStream(filePath)
+		stream.pipe(res)
 		return
 	}
 
@@ -181,21 +328,43 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT)
 
+// удаление файлов через X минут после загрузки (простейшая реализация (лучше каким-нибудь кроном))
+setInterval(() => {
+	const expired = db.prepare(`
+		SELECT id, time_to_delete, ext FROM files
+		WHERE strftime('%s', 'now') - strftime('%s', uploaded_at) >= time_to_delete * 60
+	`).all()
+
+	console.log(expired)
+
+	for (const { id, ext } of expired) {
+		const path = `uploads/${id}${ext ? '.' + ext : ''}`
+		try {
+			unlinkSync(path)
+		} catch (err) {
+			console.error(`Failed to delete file ${path}:`, err)
+		}
+		db.prepare('DELETE FROM files WHERE id = ?').run(id)
+	}
+}, 60 * 1000)
+
 // 
 
-async function someAsyncFunction(email, password) {
+async function getUserFiles(email) {
 	return new Promise((resolve) => {
-		setTimeout(() => resolve({ message: 'Data fetched successfully' }), 1000)
+		const files = db.prepare('SELECT * FROM files WHERE user_id = ?').all(email)
+
+		if (files) {
+			resolve(files)
+		} else {
+			resolve([])
+		}
 	})
 }
 
 async function getToken(req) {
 	return new Promise((resolve) => {
-		const token = req.headers.cookie
-			?.split('; ')
-			.find(row => row.startsWith('token='))
-			?.split('=')[1]
-
+		const token = req.headers.cookie?.split('; ').find(row => row.startsWith('token='))?.split('=')[1]
 		if (token) {
 			resolve(token)
 		} else {
@@ -215,9 +384,46 @@ async function getUser(email) {
 	})
 }
 
+async function saveFile(fileId, fileNameWithoutExt, fileExt, timeToDelete, email) {
+	return new Promise((resolve) => {
+		const data = db.prepare(`
+			INSERT INTO files (id, name, ext, time_to_delete, user_id) 
+			VALUES (?, ?, ?, ?, ?)
+		`).run(fileId, fileNameWithoutExt, fileExt, timeToDelete, email)
+
+		if (data) {
+			resolve(data)
+		} else {
+			resolve(null)
+		}
+	})
+}
+
 async function createToken(data) {
 	return new Promise((resolve) => {
 		const token = jwt.sign(data, JWT_SECRET, { expiresIn: '1h' })
 		resolve(token)
+	})
+}
+
+async function getFile(fileId) {
+	return new Promise((resolve) => {
+		const file = db.prepare('SELECT * FROM files WHERE id = ?').get(fileId)
+		if (file) {
+			resolve(file)
+		} else {
+			resolve(null)
+		}
+	})
+}
+
+async function updateDownloadCount(fileId, count) {
+	return new Promise((resolve) => {
+		const data = db.prepare('UPDATE files SET downloaded_n_times = ? WHERE id = ?').run(count, fileId)
+		if (data) {
+			resolve(data)
+		} else {
+			resolve(null)
+		}
 	})
 }
