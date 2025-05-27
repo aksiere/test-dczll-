@@ -35,8 +35,6 @@ const server = createServer(async (req, res) => {
 		const city = url.searchParams.get('city')
 		const lat = url.searchParams.get('lat')
 		const lon = url.searchParams.get('lon')
-		console.log(lat, lon)
-		
 
 		if (!city && (!lat || !lon)) {
 			res.statusCode = 400
@@ -49,11 +47,12 @@ const server = createServer(async (req, res) => {
 				const key = lat + '_' + lon
 				const data = await client.get(key)
 
+				res.statusCode = 200
+				res.setHeader('Content-Type', 'text/html')
+				res.setHeader('Cache-Control', `public, max-age=${TIME_TO_LIVE}`)
+
 				if (data) {
 					// return Response.json({ data: JSON.parse(data), from: 'cache' }, { headers: { 'Cache-Control': `public, max-age=${TIME_TO_LIVE}` } })
-					res.statusCode = 200
-					res.setHeader('Content-Type', 'text/html')
-					res.setHeader('Cache-Control', `public, max-age=${TIME_TO_LIVE}`)
 					res.end(showChart(JSON.parse(data)))
 				}
 
@@ -62,9 +61,6 @@ const server = createServer(async (req, res) => {
 				await client.expire(key, TIME_TO_LIVE)
 
 				// return Response.json({ data: r, from: 'api' })
-				res.statusCode = 200
-				res.setHeader('Content-Type', 'text/html')
-				res.setHeader('Cache-Control', `public, max-age=${TIME_TO_LIVE}`)
 				res.end(showChart(r))
 			}
 
@@ -94,6 +90,10 @@ const server = createServer(async (req, res) => {
 			res.end(`Error fetching weather data: ${error.message}`)
 		}
 	}
+	
+	res.statusCode = 404
+	res.setHeader('Content-Type', 'text/plain')
+	res.end('Not Found')
 })
 
 server.listen(PORT)
